@@ -21,10 +21,10 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     generation_config = {
-        "temperature": 0.7,
-        "top_p": 0.9,
+        "temperature": 0.8,
+        "top_p": 0.95,
         "top_k": 40,
-        "max_output_tokens": 150,
+        "max_output_tokens": 256,
     }
     model = genai.GenerativeModel('gemini-2.5-flash', generation_config=generation_config)
 else:
