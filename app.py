@@ -21,10 +21,10 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     generation_config = {
-        "temperature": 0.9,
-        "top_p": 0.95,
+        "temperature": 0.7,
+        "top_p": 0.9,
         "top_k": 40,
-        "max_output_tokens": 200,
+        "max_output_tokens": 150,
     }
     model = genai.GenerativeModel('gemini-2.5-flash', generation_config=generation_config)
 else:
@@ -69,10 +69,10 @@ MENU = {
     'milkshake': {'name': 'Milkshake', 'price': 5.99}
 }
 
-# In-memory storage (fallback)
+# In-memory storage
 carts = {}
 conversation_history = {}
-sessions = {}  # Store active sessions
+sessions = {}
 
 # User Authentication Functions
 def hash_password(password):
@@ -85,14 +85,12 @@ def create_user_in_salesforce(name, email, phone, password):
         return None
     
     try:
-        # Check if user already exists
         query = f"SELECT Id FROM Customer__c WHERE Email__c = '{email}' LIMIT 1"
         result = sf.query(query)
         
         if result['totalSize'] > 0:
             return {'error': 'User already exists', 'exists': True}
         
-        # Create new customer
         customer_data = {
             'Name': name,
             'Email__c': email,
@@ -121,33 +119,36 @@ def authenticate_user(email, password):
         return None
     
     try:
-        password_hash = hash_password(password)
-        query = f"SELECT Id, Name, Email__c, Phone__c FROM Customer__c WHERE Email__c = '{email}' AND Password_Hash__c = '{password_hash}' LIMIT 1"
+        query = f"SELECT Id, Name, Email__c, Phone__c, Password_Hash__c FROM Customer__c WHERE Email__c = '{email}' LIMIT 1"
         result = sf.query(query)
         
-        if result['totalSize'] > 0:
-            customer = result['records'][0]
-            
-            # Generate session token
-            session_token = secrets.token_urlsafe(32)
-            
-            # Store session
-            sessions[session_token] = {
-                'customer_id': customer['Id'],
-                'name': customer['Name'],
-                'email': customer['Email__c'],
-                'logged_in_at': datetime.now().isoformat()
-            }
-            
-            print(f"✅ User authenticated: {customer['Name']}")
-            return {
-                'session_token': session_token,
-                'customer_id': customer['Id'],
-                'name': customer['Name'],
-                'email': customer['Email__c']
-            }
-        else:
+        if result['totalSize'] == 0:
             return {'error': 'Invalid email or password'}
+        
+        customer = result['records'][0]
+        
+        password_hash = hash_password(password)
+        stored_hash = customer.get('Password_Hash__c', '')
+        
+        if password_hash != stored_hash:
+            return {'error': 'Invalid email or password'}
+        
+        session_token = secrets.token_urlsafe(32)
+        
+        sessions[session_token] = {
+            'customer_id': customer['Id'],
+            'name': customer['Name'],
+            'email': customer['Email__c'],
+            'logged_in_at': datetime.now().isoformat()
+        }
+        
+        print(f"✅ User authenticated: {customer['Name']}")
+        return {
+            'session_token': session_token,
+            'customer_id': customer['Id'],
+            'name': customer['Name'],
+            'email': customer['Email__c']
+        }
     
     except Exception as e:
         print(f"❌ Authentication error: {e}")
@@ -157,13 +158,12 @@ def get_user_from_session(session_token):
     """Get user info from session token"""
     return sessions.get(session_token)
 
-def save_order_to_salesforce(customer_id, session_id, cart_items, total, status='Draft'):
-    """Save order to Salesforce with customer link"""
+def save_order_to_salesforce(customer_id, session_id, cart_items, total, status='Completed'):
+    """Save order to Salesforce - ONLY called on checkout"""
     if not sf:
         return None
     
     try:
-        # Create Order record
         order_data = {
             'Customer__c': customer_id,
             'Session_ID__c': session_id,
@@ -176,7 +176,6 @@ def save_order_to_salesforce(customer_id, session_id, cart_items, total, status=
         order_result = sf.Order__c.create(order_data)
         order_id = order_result['id']
         
-        # Create Order Item records
         for item in cart_items:
             item_data = {
                 'Order__c': order_id,
@@ -210,7 +209,6 @@ def get_user_orders(customer_id):
         
         orders = []
         for order in result['records']:
-            # Get order items
             items_query = f"""
             SELECT Item_Name__c, Quantity__c, Unit_Price__c 
             FROM Order_Item__c 
@@ -240,7 +238,6 @@ def get_user_orders(customer_id):
         print(f"❌ Error getting orders: {e}")
         return []
 
-# AI Functions (same as before)
 def is_greeting_or_casual(text):
     casual_patterns = [
         r'^hi+$', r'^hello+$', r'^hey+$', r'^good morning$', r'^good afternoon$',
@@ -253,8 +250,22 @@ def is_greeting_or_casual(text):
             return True
     return False
 
-def extract_order_with_gemini(user_text, conversation_context=""):
+def is_checkout_command(text):
+    """Check if user wants to checkout"""
+    text_lower = text.lower().strip()
+    checkout_phrases = [
+        'checkout', 'check out', 'complete order', 'complete my order',
+        'finish order', 'finish my order', 'place order', 'place my order',
+        "that's all", "that is all", "i'm done", "im done", 'done ordering',
+        'finish', 'complete', 'thats it', "that's it"
+    ]
+    return any(phrase in text_lower for phrase in checkout_phrases)
+
+def extract_order_with_gemini(user_text):
     if is_greeting_or_casual(user_text):
+        return []
+    
+    if is_checkout_command(user_text):
         return []
     
     if not model:
@@ -263,20 +274,19 @@ def extract_order_with_gemini(user_text, conversation_context=""):
     menu_items_list = list(MENU.keys())
     menu_text = ", ".join(menu_items_list)
     
-    prompt = f"""Extract food items and quantities from this order.
+    prompt = f"""Extract food items and quantities.
 
-Available items: {menu_text}
+Menu: {menu_text}
 
-Customer said: "{user_text}"
+User: "{user_text}"
 
-Return ONLY valid JSON array:
-[{{"item": "exact_menu_item", "quantity": number}}]
+Rules:
+- "a burger" = burger, quantity 1
+- "two burgers" = burger, quantity 2
+- Return [] if no items
 
-Examples:
-"a burger" -> [{{"item": "burger", "quantity": 1}}]
-"hello" -> []
-
-JSON response:"""
+JSON only:
+[{{"item": "exact_item", "quantity": number}}]"""
 
     try:
         response = model.generate_content(prompt)
@@ -291,7 +301,7 @@ JSON response:"""
         valid_items = []
         for item in items:
             item_name = item.get('item', '').lower().strip()
-            quantity = item.get('quantity', 1)
+            quantity = int(item.get('quantity', 1))
             if item_name in MENU:
                 valid_items.append({
                     'key': item_name,
@@ -301,15 +311,14 @@ JSON response:"""
                 })
         return valid_items
     except Exception as e:
-        print(f"Gemini extraction error: {e}")
+        print(f"Gemini error: {e}")
         return fallback_extract_order(user_text)
 
 def fallback_extract_order(user_text):
     items = []
     text_lower = user_text.lower()
-    quantity_map = {
-        'a': 1, 'an': 1, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5
-    }
+    quantity_map = {'a': 1, 'an': 1, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5}
+    
     for menu_key in MENU.keys():
         if menu_key in text_lower:
             quantity = 1
@@ -319,6 +328,8 @@ def fallback_extract_order(user_text):
                 qty_word = match.group(1)
                 if qty_word in quantity_map:
                     quantity = quantity_map[qty_word]
+                elif qty_word.isdigit():
+                    quantity = int(qty_word)
             items.append({
                 'key': menu_key,
                 'name': MENU[menu_key]['name'],
@@ -334,12 +345,14 @@ def generate_response_with_gemini(cart_items, added_items, total, action='add', 
     name_greeting = f" {user_name}" if user_name else ""
     
     if action == 'welcome':
-        prompt = f"You're {ASSISTANT_NAME} at {RESTAURANT_NAME}. Write a 2-sentence welcome greeting{name_greeting}. Be casual."
+        prompt = f"You're {ASSISTANT_NAME} at {RESTAURANT_NAME}. Welcome{name_greeting} in 1-2 sentences. Be casual and friendly."
     elif action == 'add' and added_items:
         items_text = ', '.join([f"{item['quantity']} {item['name']}" for item in added_items])
-        prompt = f"Customer ordered: {items_text}. Total: ${total:.2f}. Confirm enthusiastically in 2 sentences."
+        prompt = f"Confirm order: {items_text}. New total: ${total:.2f}. Say it in 2 sentences max. Be enthusiastic and ask if they want more."
     elif action == 'checkout':
-        prompt = f"Customer checking out. Total: ${total:.2f}. Thank them warmly in 2 sentences."
+        prompt = f"Order complete! Total: ${total:.2f}. Thank customer in 2 sentences. Be warm."
+    elif action == 'no_items':
+        return "Sorry, didn't catch that! What would you like to order?"
     else:
         return "What can I get for you?"
     
@@ -355,9 +368,11 @@ def get_fallback_response(action, added_items=None, total=0, user_name=''):
         return f"Hey{name_greeting}! Welcome to {RESTAURANT_NAME}! I'm {ASSISTANT_NAME}. What can I get you?"
     elif action == 'add' and added_items:
         items_text = ', '.join([f"{item['quantity']} {item['name']}" for item in added_items])
-        return f"Got your {items_text}! That's ${total:.2f}. Want anything else?"
+        return f"Got {items_text}! Your total is ${total:.2f}. Want anything else?"
     elif action == 'checkout':
-        return f"Thanks for ordering! Your total is ${total:.2f}. We'll have that ready soon!"
+        return f"Awesome! Your order total is ${total:.2f}. We'll have it ready soon. Thanks!"
+    elif action == 'no_items':
+        return "Sorry, didn't catch that! What would you like?"
     return "What can I get for you?"
 
 # API Routes
@@ -374,7 +389,6 @@ def home():
 
 @app.route('/api/auth/signup', methods=['POST'])
 def signup():
-    """Register new user"""
     data = request.json
     name = data.get('name')
     email = data.get('email')
@@ -397,7 +411,6 @@ def signup():
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    """Login user"""
     data = request.json
     email = data.get('email')
     password = data.get('password')
@@ -423,7 +436,6 @@ def login():
 
 @app.route('/api/auth/logout', methods=['POST'])
 def logout():
-    """Logout user"""
     data = request.json
     session_token = data.get('session_token')
     
@@ -434,9 +446,7 @@ def logout():
 
 @app.route('/api/auth/me', methods=['GET'])
 def get_current_user():
-    """Get current user info"""
     session_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-    
     user = get_user_from_session(session_token)
     
     if not user:
@@ -446,7 +456,6 @@ def get_current_user():
 
 @app.route('/api/orders/history', methods=['GET'])
 def get_order_history():
-    """Get user's order history"""
     session_token = request.headers.get('Authorization', '').replace('Bearer ', '')
     user = get_user_from_session(session_token)
     
@@ -454,7 +463,6 @@ def get_order_history():
         return jsonify({'error': 'Not authenticated'}), 401
     
     orders = get_user_orders(user['customer_id'])
-    
     return jsonify({'orders': orders})
 
 @app.route('/api/menu', methods=['GET'])
@@ -470,18 +478,17 @@ def get_config():
 
 @app.route('/api/process-order', methods=['POST'])
 def process_order():
-    """Process voice order (requires authentication)"""
+    """Process voice order"""
     data = request.json
     user_text = data.get('text', '')
     session_id = data.get('session_id', 'default')
     session_token = data.get('session_token')
     
-    # Get user from session
     user = get_user_from_session(session_token) if session_token else None
     customer_id = user['customer_id'] if user else None
     user_name = user['name'] if user else None
     
-    print(f"Processing order - User: {user_name}, Said: '{user_text}'")
+    print(f"Processing - User: {user_name}, Said: '{user_text}'")
     
     if session_id not in carts:
         carts[session_id] = []
@@ -489,7 +496,6 @@ def process_order():
         conversation_history[session_id] = []
     
     conversation_history[session_id].append(f"Customer: {user_text}")
-    lower_text = user_text.lower()
     
     # Greeting
     if is_greeting_or_casual(user_text):
@@ -497,30 +503,41 @@ def process_order():
         return jsonify({
             'success': True,
             'cart': carts[session_id],
-            'total': 0,
+            'total': sum(item['price'] * item['quantity'] for item in carts[session_id]),
             'response': response_text,
             'items_added': []
         })
     
-    # Checkout
-    checkout_phrases = ['checkout', 'complete order', 'done', "that's all", 'finish']
-    if any(phrase in lower_text for phrase in checkout_phrases):
+    # Clear cart
+    if 'clear' in user_text.lower() and 'cart' in user_text.lower():
+        carts[session_id] = []
+        return jsonify({
+            'success': True,
+            'cart': [],
+            'total': 0,
+            'response': "Cart cleared! What would you like to order?"
+        })
+    
+    # Checkout - ONLY save to Salesforce here
+    if is_checkout_command(user_text):
         if not carts[session_id]:
             return jsonify({
                 'success': False,
                 'cart': [],
                 'total': 0,
-                'response': "Your cart's empty! What would you like?"
+                'response': "Your cart is empty! What would you like to order?"
             })
         
         total = sum(item['price'] * item['quantity'] for item in carts[session_id])
         response_text = generate_response_with_gemini(carts[session_id], [], total, action='checkout', user_name=user_name)
         
-        # Save to Salesforce with customer ID
+        # Save to Salesforce ONLY on checkout
         order_id = None
         if sf and customer_id:
             order_id = save_order_to_salesforce(customer_id, session_id, carts[session_id], total, 'Completed')
+            print(f"✅ Order completed and saved: {order_id}")
         
+        # Keep cart visible (don't clear)
         return jsonify({
             'success': True,
             'cart': carts[session_id],
@@ -530,7 +547,7 @@ def process_order():
             'order_id': order_id
         })
     
-    # Extract items
+    # Extract and add items (NO Salesforce save)
     extracted_items = extract_order_with_gemini(user_text)
     
     if not extracted_items:
@@ -538,7 +555,7 @@ def process_order():
             'success': False,
             'cart': carts[session_id],
             'total': sum(item['price'] * item['quantity'] for item in carts[session_id]),
-            'response': "Sorry, didn't catch that! What would you like?"
+            'response': generate_response_with_gemini([], [], 0, action='no_items')
         })
     
     # Add to cart
@@ -552,9 +569,7 @@ def process_order():
     total = sum(item['price'] * item['quantity'] for item in carts[session_id])
     response_text = generate_response_with_gemini(carts[session_id], extracted_items, total, action='add', user_name=user_name)
     
-    # Save draft order
-    if sf and customer_id:
-        save_order_to_salesforce(customer_id, session_id, carts[session_id], total, 'Draft')
+    print(f"✅ Added to cart (NOT saved to Salesforce yet)")
     
     return jsonify({
         'success': True,
