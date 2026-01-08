@@ -345,35 +345,85 @@ def generate_response_with_gemini(cart_items, added_items, total, action='add', 
     name_greeting = f" {user_name}" if user_name else ""
     
     if action == 'welcome':
-        prompt = f"You're {ASSISTANT_NAME} at {RESTAURANT_NAME}. Welcome{name_greeting} in 1-2 sentences. Be casual and friendly."
+        prompt = f"""You are {ASSISTANT_NAME}, a friendly server at {RESTAURANT_NAME}.
+Greet the customer{name_greeting} warmly and ask what they would like to order.
+Keep it to 2-3 sentences maximum.
+Be natural and conversational."""
+        
     elif action == 'add' and added_items:
         items_text = ', '.join([f"{item['quantity']} {item['name']}" for item in added_items])
-        prompt = f"Confirm order: {items_text}. New total: ${total:.2f}. Say it in 2 sentences max. Be enthusiastic and ask if they want more."
+        prompt = f"""You are {ASSISTANT_NAME}, a friendly server at {RESTAURANT_NAME}.
+
+Customer just ordered: {items_text}
+Their new cart total is: ${total:.2f}
+
+Respond in EXACTLY 2-3 complete sentences:
+1. Enthusiastically confirm what was added
+2. State the new total clearly
+3. Ask if they want anything else
+
+Be conversational and natural. Complete all sentences."""
+        
     elif action == 'checkout':
-        prompt = f"Order complete! Total: ${total:.2f}. Thank customer in 2 sentences. Be warm."
+        prompt = f"""You are {ASSISTANT_NAME}, a friendly server at {RESTAURANT_NAME}.
+
+The customer is completing their order.
+Final total: ${total:.2f}
+
+Respond in EXACTLY 2-3 complete sentences:
+1. Thank them for their order
+2. Confirm the total amount
+3. Let them know the food will be ready soon
+
+Be warm and appreciative. Complete all sentences."""
+        
     elif action == 'no_items':
-        return "Sorry, didn't catch that! What would you like to order?"
+        return "Sorry, I didn't catch that! Could you repeat what you'd like to order?"
     else:
-        return "What can I get for you?"
+        return "What can I get for you today?"
     
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip().strip('"\'')
-    except:
+        response = model.generate_content(
+            prompt,
+            safety_settings={
+                'HARASSMENT': 'block_none',
+                'HATE_SPEECH': 'block_none',
+                'SEXUALLY_EXPLICIT': 'block_none',
+                'DANGEROUS_CONTENT': 'block_none'
+            }
+        )
+        
+        result = response.text.strip()
+        result = result.strip('"\'')
+        
+        # Make sure response is complete (ends with punctuation)
+        if result and not result[-1] in '.!?':
+            result += '.'
+        
+        return result if result else get_fallback_response(action, added_items, total, user_name)
+    
+    except Exception as e:
+        print(f"Gemini error: {e}")
         return get_fallback_response(action, added_items, total, user_name)
 
 def get_fallback_response(action, added_items=None, total=0, user_name=''):
+    """High-quality fallback responses"""
     name_greeting = f" {user_name}" if user_name else ""
+    
     if action == 'welcome':
-        return f"Hey{name_greeting}! Welcome to {RESTAURANT_NAME}! I'm {ASSISTANT_NAME}. What can I get you?"
+        return f"Hey{name_greeting}! Welcome to {RESTAURANT_NAME}! I'm {ASSISTANT_NAME}, and I'll be taking care of you today. What can I get started for you?"
+    
     elif action == 'add' and added_items:
         items_text = ', '.join([f"{item['quantity']} {item['name']}" for item in added_items])
-        return f"Got {items_text}! Your total is ${total:.2f}. Want anything else?"
+        return f"Perfect! I've added {items_text} to your order. Your new total is ${total:.2f}. Would you like anything else?"
+    
     elif action == 'checkout':
-        return f"Awesome! Your order total is ${total:.2f}. We'll have it ready soon. Thanks!"
+        return f"Awesome! Thanks so much for your order. Your total comes to ${total:.2f}. We'll have that ready for you in just a few minutes!"
+    
     elif action == 'no_items':
-        return "Sorry, didn't catch that! What would you like?"
-    return "What can I get for you?"
+        return "Sorry, I didn't quite catch that! Could you tell me what you'd like to order?"
+    
+    return "What can I get for you today?"
 
 # API Routes
 @app.route('/', methods=['GET'])
