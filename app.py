@@ -73,6 +73,7 @@ MENU = {
 carts = {}
 conversation_history = {}
 sessions = {}
+completed_orders = {}  # Track which sessions have completed orders
 
 # User Authentication Functions
 def hash_password(password):
@@ -280,13 +281,23 @@ Menu: {menu_text}
 
 User: "{user_text}"
 
-Rules:
+IMPORTANT Rules:
 - "a burger" = burger, quantity 1
 - "two burgers" = burger, quantity 2
-- Return [] if no items
+- "three more coffees" = coffee, quantity 3
+- "add 5 fries" = fries, quantity 5
+- If user says "more", still count the quantity correctly
+- Return [] if no items found
 
-JSON only:
-[{{"item": "exact_item", "quantity": number}}]"""
+Return ONLY valid JSON array:
+[{{"item": "exact_menu_item", "quantity": number}}]
+
+Examples:
+"I want three coffees" -> [{{"item": "coffee", "quantity": 3}}]
+"add two more burgers" -> [{{"item": "burger", "quantity": 2}}]
+"five fries please" -> [{{"item": "fries", "quantity": 5}}]
+
+JSON response:"""
 
     try:
         response = model.generate_content(prompt)
@@ -315,27 +326,49 @@ JSON only:
         return fallback_extract_order(user_text)
 
 def fallback_extract_order(user_text):
+    """Enhanced fallback with better quantity detection"""
     items = []
     text_lower = user_text.lower()
-    quantity_map = {'a': 1, 'an': 1, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5}
+    
+    # Enhanced quantity map
+    quantity_map = {
+        'a': 1, 'an': 1, 'one': 1, 
+        'two': 2, 'three': 3, 'four': 4, 'five': 5,
+        'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+    }
     
     for menu_key in MENU.keys():
         if menu_key in text_lower:
             quantity = 1
-            pattern = r'(\w+)\s+' + menu_key
-            match = re.search(pattern, text_lower)
-            if match:
-                qty_word = match.group(1)
-                if qty_word in quantity_map:
-                    quantity = quantity_map[qty_word]
-                elif qty_word.isdigit():
-                    quantity = int(qty_word)
+            
+            # Look for quantity words before the item
+            words = text_lower.split()
+            for i, word in enumerate(words):
+                if menu_key.split()[0] in word:  # Found the item
+                    # Check previous words for quantity
+                    if i > 0:
+                        prev_word = words[i-1]
+                        # Check for number words
+                        if prev_word in quantity_map:
+                            quantity = quantity_map[prev_word]
+                        # Check for digits
+                        elif prev_word.isdigit():
+                            quantity = int(prev_word)
+                        # Check two words back for "three more", "five more", etc.
+                        elif i > 1 and words[i-1] == 'more':
+                            if words[i-2] in quantity_map:
+                                quantity = quantity_map[words[i-2]]
+                            elif words[i-2].isdigit():
+                                quantity = int(words[i-2])
+                    break
+            
             items.append({
                 'key': menu_key,
                 'name': MENU[menu_key]['name'],
                 'price': MENU[menu_key]['price'],
                 'quantity': quantity
             })
+    
     return items
 
 def generate_response_with_gemini(cart_items, added_items, total, action='add', user_text='', user_name=''):
@@ -587,7 +620,10 @@ def process_order():
             order_id = save_order_to_salesforce(customer_id, session_id, carts[session_id], total, 'Completed')
             print(f"✅ Order completed and saved: {order_id}")
         
-        # Keep cart visible (don't clear)
+        # Mark this session as having completed an order
+        completed_orders[session_id] = True
+        
+        # Keep cart visible but mark as completed
         return jsonify({
             'success': True,
             'cart': carts[session_id],
@@ -608,6 +644,12 @@ def process_order():
             'response': generate_response_with_gemini([], [], 0, action='no_items')
         })
     
+    # Check if this session completed an order - if yes, clear cart for new order
+    if completed_orders.get(session_id, False):
+        print(f"🔄 Previous order completed, starting new cart for session {session_id}")
+        carts[session_id] = []
+        completed_orders[session_id] = False
+    
     # Add to cart
     for item in extracted_items:
         existing = next((x for x in carts[session_id] if x['key'] == item['key']), None)
@@ -619,7 +661,7 @@ def process_order():
     total = sum(item['price'] * item['quantity'] for item in carts[session_id])
     response_text = generate_response_with_gemini(carts[session_id], extracted_items, total, action='add', user_name=user_name)
     
-    print(f"✅ Added to cart (NOT saved to Salesforce yet)")
+    print(f"✅ Added to cart: {extracted_items}")
     
     return jsonify({
         'success': True,
