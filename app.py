@@ -671,6 +671,55 @@ def process_order():
         'items_added': extracted_items
     })
 
+@app.route('/api/text-to-speech', methods=['POST'])
+def text_to_speech():
+    """Convert text to speech using ElevenLabs API"""
+    data = request.json
+    text = data.get('text', '')
+    
+    ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY', '')
+    
+    if not ELEVENLABS_API_KEY:
+        return jsonify({'error': 'ElevenLabs API key not configured'}), 400
+    
+    try:
+        # ElevenLabs API endpoint
+        voice_id = "21m00Tcm4TlvDq8ikWAM"  # Rachel voice (friendly female)
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        
+        headers = {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": ELEVENLABS_API_KEY
+        }
+        
+        payload = {
+            "text": text,
+            "model_id": "eleven_monolingual_v1",
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.75
+            }
+        }
+        
+        import requests
+        response = requests.post(url, json=payload, headers=headers)
+        
+        if response.status_code == 200:
+            # Return audio as base64
+            import base64
+            audio_base64 = base64.b64encode(response.content).decode('utf-8')
+            return jsonify({
+                'success': True,
+                'audio': audio_base64
+            })
+        else:
+            return jsonify({'error': 'TTS generation failed'}), 500
+            
+    except Exception as e:
+        print(f"ElevenLabs TTS error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/welcome', methods=['GET'])
 def get_welcome():
     session_token = request.headers.get('Authorization', '').replace('Bearer ', '')
