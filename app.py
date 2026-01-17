@@ -671,7 +671,23 @@ def text_to_speech():
         import requests
         import base64
         
-        voice_id = "21m00Tcm4TlvDq8ikWAM"  # Rachel voice
+        # VOICE OPTIONS - Choose one from the list below:
+        # Popular voices:
+        # "21m00Tcm4TlvDq8ikWAM" - Rachel (friendly female)
+        # "EXAVITQu4vr4xnSDxMaL" - Bella (expressive female)
+        # "ErXwobaYiN019PkySvjV" - Antoni (well-rounded male)
+        # "VR6AewLTigWG4xSOukaG" - Arnold (crisp male)
+        # "pNInz6obpgDQGcFmaJgB" - Adam (deep male)
+        # "yoZ06aMxZJJ28mfd3POQ" - Sam (dynamic male)
+        # "AZnzlk1XvdvUeBnXmlld" - Domi (strong female)
+        # "MF3mGyEYCl7XYWbV9V6O" - Elli (emotional female)
+        # "TxGEqnHWrfWFTfGW9XjX" - Josh (young male)
+        # "jBpfuIE2acCO8z3wKNLl" - Gigi (childish female)
+        # "onwK4e9ZLuTAKqWW03F9" - Daniel (authoritative male)
+        
+        # Set your preferred voice here:
+        voice_id = os.getenv('ELEVENLABS_VOICE_ID', '21m00Tcm4TlvDq8ikWAM')  # Default: Rachel
+        
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
         
         headers = {
@@ -685,12 +701,14 @@ def text_to_speech():
             "model_id": "eleven_monolingual_v1",
             "voice_settings": {
                 "stability": 0.5,
-                "similarity_boost": 0.75
+                "similarity_boost": 0.75,
+                "style": 0.0,
+                "use_speaker_boost": True
             }
         }
         
-        print(f"🎤 Generating TTS for: {text[:50]}...")
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        print(f"🎤 Generating TTS with voice {voice_id} for: {text[:50]}...")
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
         
         if response.status_code == 200:
             audio_base64 = base64.b64encode(response.content).decode('utf-8')
