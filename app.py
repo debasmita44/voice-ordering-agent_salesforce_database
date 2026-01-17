@@ -73,7 +73,7 @@ MENU = {
 carts = {}
 conversation_history = {}
 sessions = {}
-completed_orders = {}
+completed_orders = {}  # Track which sessions have completed orders
 
 # User Authentication Functions
 def hash_password(password):
@@ -330,6 +330,7 @@ def fallback_extract_order(user_text):
     items = []
     text_lower = user_text.lower()
     
+    # Enhanced quantity map
     quantity_map = {
         'a': 1, 'an': 1, 'one': 1, 
         'two': 2, 'three': 3, 'four': 4, 'five': 5,
@@ -340,15 +341,20 @@ def fallback_extract_order(user_text):
         if menu_key in text_lower:
             quantity = 1
             
+            # Look for quantity words before the item
             words = text_lower.split()
             for i, word in enumerate(words):
-                if menu_key.split()[0] in word:
+                if menu_key.split()[0] in word:  # Found the item
+                    # Check previous words for quantity
                     if i > 0:
                         prev_word = words[i-1]
+                        # Check for number words
                         if prev_word in quantity_map:
                             quantity = quantity_map[prev_word]
+                        # Check for digits
                         elif prev_word.isdigit():
                             quantity = int(prev_word)
+                        # Check two words back for "three more", "five more", etc.
                         elif i > 1 and words[i-1] == 'more':
                             if words[i-2] in quantity_map:
                                 quantity = quantity_map[words[i-2]]
@@ -423,6 +429,7 @@ Be warm and appreciative. Complete all sentences."""
         result = response.text.strip()
         result = result.strip('"\'')
         
+        # Make sure response is complete (ends with punctuation)
         if result and not result[-1] in '.!?':
             result += '.'
         
@@ -573,6 +580,7 @@ def process_order():
     
     conversation_history[session_id].append(f"Customer: {user_text}")
     
+    # Greeting
     if is_greeting_or_casual(user_text):
         response_text = generate_response_with_gemini([], [], 0, action='welcome', user_name=user_name)
         return jsonify({
@@ -583,6 +591,7 @@ def process_order():
             'items_added': []
         })
     
+    # Clear cart
     if 'clear' in user_text.lower() and 'cart' in user_text.lower():
         carts[session_id] = []
         return jsonify({
@@ -592,6 +601,7 @@ def process_order():
             'response': "Cart cleared! What would you like to order?"
         })
     
+    # Checkout - ONLY save to Salesforce here
     if is_checkout_command(user_text):
         if not carts[session_id]:
             return jsonify({
@@ -604,13 +614,16 @@ def process_order():
         total = sum(item['price'] * item['quantity'] for item in carts[session_id])
         response_text = generate_response_with_gemini(carts[session_id], [], total, action='checkout', user_name=user_name)
         
+        # Save to Salesforce ONLY on checkout
         order_id = None
         if sf and customer_id:
             order_id = save_order_to_salesforce(customer_id, session_id, carts[session_id], total, 'Completed')
             print(f"✅ Order completed and saved: {order_id}")
         
+        # Mark this session as having completed an order
         completed_orders[session_id] = True
         
+        # Keep cart visible but mark as completed
         return jsonify({
             'success': True,
             'cart': carts[session_id],
@@ -620,6 +633,7 @@ def process_order():
             'order_id': order_id
         })
     
+    # Extract and add items (NO Salesforce save)
     extracted_items = extract_order_with_gemini(user_text)
     
     if not extracted_items:
@@ -630,11 +644,13 @@ def process_order():
             'response': generate_response_with_gemini([], [], 0, action='no_items')
         })
     
+    # Check if this session completed an order - if yes, clear cart for new order
     if completed_orders.get(session_id, False):
         print(f"🔄 Previous order completed, starting new cart for session {session_id}")
         carts[session_id] = []
         completed_orders[session_id] = False
     
+    # Add to cart
     for item in extracted_items:
         existing = next((x for x in carts[session_id] if x['key'] == item['key']), None)
         if existing:
@@ -654,60 +670,6 @@ def process_order():
         'response': response_text,
         'items_added': extracted_items
     })
-
-@app.route('/api/text-to-speech', methods=['POST'])
-def text_to_speech():
-    """Convert text to speech using ElevenLabs API"""
-    data = request.json
-    text = data.get('text', '')
-    
-    ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY', '')
-    
-    if not ELEVENLABS_API_KEY:
-        print("❌ ElevenLabs API key not configured")
-        return jsonify({'error': 'ElevenLabs API key not configured', 'success': False}), 400
-    
-    try:
-        import requests
-        import base64
-        
-        voice_id = "21m00Tcm4TlvDq8ikWAM"  # Rachel voice
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-        
-        headers = {
-            "Accept": "audio/mpeg",
-            "Content-Type": "application/json",
-            "xi-api-key": ELEVENLABS_API_KEY
-        }
-        
-        payload = {
-            "text": text,
-            "model_id": "eleven_monolingual_v1",
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75
-            }
-        }
-        
-        print(f"🎤 Generating TTS for: {text[:50]}...")
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            audio_base64 = base64.b64encode(response.content).decode('utf-8')
-            print(f"✅ TTS generated successfully ({len(audio_base64)} chars)")
-            return jsonify({
-                'success': True,
-                'audio': audio_base64
-            })
-        else:
-            error_msg = f"ElevenLabs API error: {response.status_code} - {response.text}"
-            print(f"❌ {error_msg}")
-            return jsonify({'error': error_msg, 'success': False}), 500
-            
-    except Exception as e:
-        error_msg = f"ElevenLabs TTS error: {str(e)}"
-        print(f"❌ {error_msg}")
-        return jsonify({'error': error_msg, 'success': False}), 500
 
 @app.route('/api/welcome', methods=['GET'])
 def get_welcome():
