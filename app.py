@@ -460,8 +460,7 @@ def home():
         'assistant': ASSISTANT_NAME,
         'gemini_configured': bool(GEMINI_API_KEY),
         'salesforce_connected': bool(sf),
-        'multi_user_enabled': True,
-        'elevenlabs_voice': os.getenv('ELEVENLABS_VOICE_ID', '21m00Tcm4TlvDq8ikWAM')
+        'multi_user_enabled': True
     })
 
 @app.route('/api/auth/signup', methods=['POST'])
@@ -658,7 +657,7 @@ def process_order():
 
 @app.route('/api/text-to-speech', methods=['POST'])
 def text_to_speech():
-    """Convert text to speech using ElevenLabs API with custom voice"""
+    """Convert text to speech using ElevenLabs API"""
     data = request.json
     text = data.get('text', '')
     
@@ -672,15 +671,22 @@ def text_to_speech():
         import requests
         import base64
         
-        # Get voice ID from environment variable or use default
-        voice_id = os.getenv('ELEVENLABS_VOICE_ID', '21m00Tcm4TlvDq8ikWAM')
+        # VOICE OPTIONS - Choose one from the list below:
+        # Popular voices:
+        # "21m00Tcm4TlvDq8ikWAM" - Rachel (friendly female)
+        # "EXAVITQu4vr4xnSDxMaL" - Bella (expressive female)
+        # "ErXwobaYiN019PkySvjV" - Antoni (well-rounded male)
+        # "VR6AewLTigWG4xSOukaG" - Arnold (crisp male)
+        # "pNInz6obpgDQGcFmaJgB" - Adam (deep male)
+        # "yoZ06aMxZJJ28mfd3POQ" - Sam (dynamic male)
+        # "AZnzlk1XvdvUeBnXmlld" - Domi (strong female)
+        # "MF3mGyEYCl7XYWbV9V6O" - Elli (emotional female)
+        # "TxGEqnHWrfWFTfGW9XjX" - Josh (young male)
+        # "jBpfuIE2acCO8z3wKNLl" - Gigi (childish female)
+        # "onwK4e9ZLuTAKqWW03F9" - Daniel (authoritative male)
         
-        print("=" * 60)
-        print(f"🎤 TTS REQUEST")
-        print(f"📝 Text: {text[:80]}...")
-        print(f"🎭 Voice ID from env: {voice_id}")
-        print(f"🔑 API Key configured: {'Yes' if ELEVENLABS_API_KEY else 'No'}")
-        print("=" * 60)
+        # Set your preferred voice here:
+        voice_id = os.getenv('ELEVENLABS_VOICE_ID', '21m00Tcm4TlvDq8ikWAM')  # Default: Rachel
         
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
         
@@ -690,36 +696,35 @@ def text_to_speech():
             "xi-api-key": ELEVENLABS_API_KEY
         }
         
-        # Use eleven_turbo_v2_5 - works on free tier
         payload = {
             "text": text,
-            "model_id": "eleven_turbo_v2_5",
+            "model_id": "eleven_monolingual_v1",
             "voice_settings": {
                 "stability": 0.5,
-                "similarity_boost": 0.8,
+                "similarity_boost": 0.75,
                 "style": 0.0,
                 "use_speaker_boost": True
             }
         }
         
-        response = requests.post(url, json=payload, headers=headers, timeout=20)
+        print(f"🎤 Generating TTS with voice {voice_id} for: {text[:50]}...")
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
         
         if response.status_code == 200:
             audio_base64 = base64.b64encode(response.content).decode('utf-8')
-            print(f"✅ TTS SUCCESS - Voice: {voice_id}, Size: {len(audio_base64)} chars")
+            print(f"✅ TTS generated successfully ({len(audio_base64)} chars)")
             return jsonify({
                 'success': True,
-                'audio': audio_base64,
-                'voice_id': voice_id
+                'audio': audio_base64
             })
         else:
-            error_msg = f"ElevenLabs API error: {response.status_code} - {response.text[:200]}"
-            print(f"❌ TTS FAILED: {error_msg}")
-            return jsonify({'error': error_msg, 'success': False}), response.status_code
+            error_msg = f"ElevenLabs API error: {response.status_code} - {response.text}"
+            print(f"❌ {error_msg}")
+            return jsonify({'error': error_msg, 'success': False}), 500
             
     except Exception as e:
         error_msg = f"ElevenLabs TTS error: {str(e)}"
-        print(f"❌ TTS EXCEPTION: {error_msg}")
+        print(f"❌ {error_msg}")
         return jsonify({'error': error_msg, 'success': False}), 500
 
 @app.route('/api/welcome', methods=['GET'])
