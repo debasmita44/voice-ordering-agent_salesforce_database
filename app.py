@@ -686,10 +686,10 @@ def text_to_speech():
             "xi-api-key": ELEVENLABS_API_KEY
         }
         
-        # Optimized payload for better quality
+        # Use eleven_turbo_v2_5 - works on free tier
         payload = {
             "text": text,
-            "model_id": "eleven_monolingual_v1",
+            "model_id": "eleven_turbo_v2_5",
             "voice_settings": {
                 "stability": 0.5,
                 "similarity_boost": 0.8,
