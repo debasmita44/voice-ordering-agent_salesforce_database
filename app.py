@@ -675,8 +675,12 @@ def text_to_speech():
         # Get voice ID from environment variable or use default
         voice_id = os.getenv('ELEVENLABS_VOICE_ID', '21m00Tcm4TlvDq8ikWAM')
         
-        print(f"🎤 Using voice ID: {voice_id}")
-        print(f"🎤 Generating TTS for: {text[:50]}...")
+        print("=" * 60)
+        print(f"🎤 TTS REQUEST")
+        print(f"📝 Text: {text[:80]}...")
+        print(f"🎭 Voice ID from env: {voice_id}")
+        print(f"🔑 API Key configured: {'Yes' if ELEVENLABS_API_KEY else 'No'}")
+        print("=" * 60)
         
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
         
@@ -702,20 +706,20 @@ def text_to_speech():
         
         if response.status_code == 200:
             audio_base64 = base64.b64encode(response.content).decode('utf-8')
-            print(f"✅ TTS generated successfully with voice {voice_id} ({len(audio_base64)} chars)")
+            print(f"✅ TTS SUCCESS - Voice: {voice_id}, Size: {len(audio_base64)} chars")
             return jsonify({
                 'success': True,
                 'audio': audio_base64,
                 'voice_id': voice_id
             })
         else:
-            error_msg = f"ElevenLabs API error: {response.status_code} - {response.text}"
-            print(f"❌ {error_msg}")
-            return jsonify({'error': error_msg, 'success': False}), 500
+            error_msg = f"ElevenLabs API error: {response.status_code} - {response.text[:200]}"
+            print(f"❌ TTS FAILED: {error_msg}")
+            return jsonify({'error': error_msg, 'success': False}), response.status_code
             
     except Exception as e:
         error_msg = f"ElevenLabs TTS error: {str(e)}"
-        print(f"❌ {error_msg}")
+        print(f"❌ TTS EXCEPTION: {error_msg}")
         return jsonify({'error': error_msg, 'success': False}), 500
 
 @app.route('/api/welcome', methods=['GET'])
